@@ -7,7 +7,7 @@ The Stand alone was written to run on a Windows 64 machine and must be installed
 
 Detailed instructions on the settings and calibration of the unit are at https://github.com/jason-bula/velodyne_tls
 
-![desktop_app](https://user-images.githubusercontent.com/15005663/234740916-b61a77a4-608c-4cb5-b7fd-e41293aaf593.png)
+![Ouster Pcap to Point Cloud](https://github.com/Rotoslider/Ouster-PCAP-to-Pointcloud/assets/15005663/1c00b97f-78d2-4b45-a21f-74f274b376ac)
 
 The software for the scanner can be found here: https://github.com/Rotoslider/TLS_Pie which will need updated to capture Ouster Pcap files. 
 The Ouster should be rotated slowly and precisely along the X axis. A rotation time of 4 minutes will produce a very dense pointcloud. The connector should be pointing down. 

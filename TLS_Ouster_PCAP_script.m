@@ -2,7 +2,20 @@
 %    Original Author : Jason Bula
 %    Modified to work with Ouster Lidar and as a stand alone App by Donny Mott
 
-load('C:\TLS_Ouster\application\settings.mat')
+
+         % Get user home directory in Unix-based systems (including Linux and Mac)
+         %[status, user_home] = system('echo $HOME');
+
+         % Get user home directory in Windows
+         [status, user_home] = system('echo %USERPROFILE%');
+
+         % Trim trailing newline character from system command output
+         user_home = strtrim(user_home);
+
+         % Set the script path
+         my_settings = fullfile(user_home, 'TLS_Ouster', 'application', 'settings.mat');
+
+         load(my_settings);
 
 pcapFileName = pcapFileName;
 calibFileName = calibFileName;
@@ -14,20 +27,36 @@ file = pcapFileName;
 [filepath,~,~] = fileparts(file);
 input = filepath;
 disp(input)
-cd (input)
 
 % Export folder
-if (~exist('results', 'dir')); mkdir('results'); end%if
+resultsDir = fullfile(input, 'results');
+disp(resultsDir)
+try
+if ~exist(resultsDir, 'dir')
+    mkdir(resultsDir);
+end
+catch ME
+    disp(['Error creating directory: ', ME.message])
+end
 
-output ='results\';
+output = resultsDir;
 file = pcapFileName;
-[~,output_name,ext] = fileparts(file);
-output_file_name = output_name;
+[~,output_file_name,ext] = fileparts(file);
+disp(output_file_name)
+
 
 %% Initialization of parameters 
-times = times; % Scan duration in tenths of a second (sec^-1) 
-angle = angle; % Ouster TLS X+ is up, Velodyne is Y+ up
-first = first; % Time at the first frame
+times = times; % Scan duration in seconds 
+times_calculated = times * 10;  % times_calculated is now in tenths of a second
+
+angle = angle; % Rotation in degrees around motor axis. Ouster TLS X+ is up, Velodyne is Y+ up
+
+if isempty(angle) || ~isnumeric(angle) || angle < 45 || angle > 360
+    disp('Input for angle is invalid or outside the valid range (45-360). Setting angle to 360.');
+    angle = 360;
+end
+
+first = first; % Time at the first frame (delay)
 
 %% Export parameters
 % Set to 0 to keep all the points
@@ -49,6 +78,8 @@ R =     R;
 
 theta3 = 0; % adjust for irregularities or discrepancies in the speed of the motor
 
+
+
 %% Point cloud correction to be applied during rotation
 % 
 %  In this part of the code, the scan will be extracted frame by frame in order to to apply the necessary correction to realign the point cloud.
@@ -59,10 +90,47 @@ theta3 = 0; % adjust for irregularities or discrepancies in the speed of the mot
 
 % Initialisation
 ousterReader = ousterFileReader(pcapFileName,calibFileName);
-last = first +times; % Time at the last frame
-angle_deg=(0:angle/times:angle); % Angle after each frame
+
+%count frames of scan
+totalScanFrames = ousterReader.NumberOfFrames;
+%disp(totalScanFrames)
+fprintf('Total Number of Scan Frames (totalScanFrames): %d\n', totalScanFrames);
+
+usableFrames = totalScanFrames - first;  % frames-start delay
+%disp(usableFrames)
+fprintf('Total Number of Scan Frames minus Delay (usableFrames): %d\n', usableFrames);
+
+% Convert usableFrames to user scale and round down to nearest integer
+usableTimes = floor(usableFrames / 10);  % account for user's times being 1/10th of the actual frame number
+
+%disp(usableTimes)
+fprintf('Total Number of Scan Frames minus Delay / 10 (usableTimes): %d\n', usableTimes);
+
+% Check if 'times' exceeds the usable times
+if times > usableTimes
+    warning('Entered time value is too large. It has been replaced with the maximum allowed Time of %d.', usableTimes);
+    times_calculated = usableFrames;  % replace times with maximum allowed value
+    times = usableTimes;
+end
+
+%disp(times)
+fprintf('Input Value in Time (times): %d\n', times);
+
+%disp(times_calculated)
+fprintf('times calculated: %d\n', times_calculated);
+
+settings_file = fullfile(user_home, 'TLS_Ouster', 'application', 'settings.mat'); %Windows
+save(settings_file, 'times', 'angle', 'first', 'gridStep', 'alpha_1', 'alpha_2', 'R', 'pos', 'pos2', 'pcapFileName', 'calibFileName', 'usableTimes', 'usableFrames','totalScanFrames');
+
+
+last = first + times_calculated; % Time at the last frame
+angle_deg=(0:angle/times_calculated:angle); % Angle after each frame
 angle = deg2rad(angle_deg); % Angle in radian
-s = 0; 
+s = 0;
+
+
+% Initialize Cloud
+%Cloud = cell(1, length(angle) - 1);
 
 for i = 2 : length(angle) % Runs as many times as there are frames
      NF = first + s;
@@ -174,7 +242,7 @@ tform_T = affine3d(T4);
 curr_img = pctransform(ptCloudIn,tform_T); % configuration 2
 
 tform_R = affine3d(VM);
-Nuage{i-1} = pctransform(curr_img,tform_R); % Save in a cell
+Cloud{i-1} = pctransform(curr_img,tform_R); % Save in a cell
 
 s = s + 1; % count update
 
@@ -228,7 +296,7 @@ int_ref_final = [];
 
 % Acceleration of the process by combining several loops
 for iii = 1 : 10 
-    for ii = round((times/10*iii)-((times/10)-1)) : round(iii*times/10)    
+    for ii = round((times_calculated/10*iii)-((times_calculated/10)-1)) : round(iii*times_calculated/10)    
    
 
      for i = iiii:iiii % save the band separately
@@ -243,10 +311,16 @@ for iii = 1 : 10
 % 32 corresponds to the band, 1800 corresponds to the number of points recorded
 % per band, 3 corresponds to the x, y and z values. 
 
-x1(i,:) = Nuage{1,ii}.Location(i,:,1);
-y1(i,:) = Nuage{1,ii}.Location(i,:,2);
-z1(i,:) = Nuage{1,ii}.Location(i,:,3);
-int1(i,:) = Nuage{1,ii}.Intensity(i,:);
+%disp(['Size of Cloud: ', mat2str(size(Cloud))]);
+%disp(['ii: ', num2str(ii)]);
+%disp(['Size of Cloud{1,ii}.Location: ', mat2str(size(Cloud{1,ii}.Location))]);
+
+
+
+x1(i,:) = Cloud{1,ii}.Location(i,:,1);
+y1(i,:) = Cloud{1,ii}.Location(i,:,2);
+z1(i,:) = Cloud{1,ii}.Location(i,:,3);
+int1(i,:) = Cloud{1,ii}.Intensity(i,:);
 
 
 x = [x x1(i,:)];
@@ -309,7 +383,8 @@ PC_Final1 = pctransform(PC_Final1, affine3d(RotY));
 %% Point cloud export Seperate Files plus merged file
 
 % Defining output document names
-filename = sprintf([output_file_name,'_', num2str(iiii), '.ply']); % added .ply extension
+try
+filename = sprintf('%s_%d.ply', output_file_name, iiii);
 
 % Change directory to output
 cd(output)
@@ -320,7 +395,7 @@ pcwrite(PC_Final1,filename,'PLYFormat','binary');
 
 % Store filenames for later merging
 filesToMerge{bande_sep} = fullfile(output, filename);
-
+disp(['File stored for merging: ', filesToMerge{bande_sep}]);
 
 % Return to input directory
 cd(input)
@@ -328,6 +403,9 @@ ref = []; % suppression of the loaded point cloud
 f = msgbox((["Processed File:";output_file_name,'_', num2str(iiii) ' of 32\n']),"Status");
 pause(1)
 if isvalid(f); delete(f); end
+catch ME
+    disp(['Error writing file: ', ME.message])
+end
 end
 % Define merge tolerance
 %mergeTolerance = gridStep unless gridStep is 0 then subsample at 0.005
@@ -356,9 +434,60 @@ merged_filename = [output_file_name,'_merged.ply'];
 
 % Save the merged point cloud
 pcwrite(mergedPointCloud, fullfile(output, merged_filename), 'PLYFormat', 'binary');
+disp(['Merged File Saved: ', merged_filename]);
+
+% Display the merged point cloud
+
+% Set the maximum limit of points for visualization
+    maxNumPoints = 5e5; % 100,000 points would be 1e5, 500,000 would be 5e5 and 1,000,000 is to many points.
+    if mergedPointCloud.Count > maxNumPoints
+        % Downsample the point cloud if it contains more than the maximum limit
+        mergedPointCloud = pcdownsample(mergedPointCloud, 'random', maxNumPoints / mergedPointCloud.Count);
+    end
+
+    % Normalize the Z values to the range [0, 1]
+    z = mergedPointCloud.Location(:, 3); % Z values
+    z = (z - min(z)) / (max(z) - min(z)); % normalization to [0, 1]
+
+    % Apply the colormap
+    cmap = jet(256); % colormap
+    c = round(z * (size(cmap, 1) - 1)) + 1; % Match color indices to z values
+    color = uint8(cmap(c, :) * 255); % Convert to 8-bit RGB color
+
+    % Create a new point cloud with color
+    mergedPointCloudColor = pointCloud(mergedPointCloud.Location, 'Color', color);
+
+    % Apply the colormap
+    pcshow(mergedPointCloudColor);
+    title('Merged Point Cloud');
+    xlabel("X")
+    ylabel("Y")
+    zlabel("Z")
 else
     % Specify action for the case of one file
     disp('Only one file, skipping merging process.')
+
+    % Read the single point cloud file
+    singlePointCloud = pcread(filesToMerge{1});
+
+    % Normalize the Z values to the range [0, 1]
+    z = singlePointCloud.Location(:, 3); % Z values
+    z = (z - min(z)) / (max(z) - min(z)); % normalization to [0, 1]
+
+    % Apply the colormap
+    cmap = jet(256); % colormap
+    c = round(z * (size(cmap, 1) - 1)) + 1; % Match color indices to z values
+    color = uint8(cmap(c, :) * 255); % Convert to 8-bit RGB color
+
+    % Create a new point cloud with color
+    singlePointCloudColor = pointCloud(singlePointCloud.Location, 'Color', color);
+
+    % Display the single point cloud
+    pcshow(singlePointCloudColor);
+    title('Single Point Cloud');
+    xlabel("X")
+    ylabel("Y")
+    zlabel("Z")
 end
 % Return to input directory
 cd(input)

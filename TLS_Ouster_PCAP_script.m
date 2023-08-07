@@ -58,6 +58,8 @@ end
 
 first = first; % Time at the first frame (delay)
 
+filesToMerge = {}; %clean array
+
 %% Export parameters
 % Set to 0 to keep all the points
 % Set to 1 to keep the x-positives values (needed for Ouster)
